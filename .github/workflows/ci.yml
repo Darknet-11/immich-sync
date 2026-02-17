@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Install Immich (background)
+        run: sudo snap install immich-distribution &
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Build
+        run: cargo build
+
+      - name: Wait for Immich
+        run: |
+          echo "Waiting for Immich to become ready..."
+          for i in $(seq 1 120); do
+            if curl -sf http://localhost > /dev/null 2>&1; then
+              echo "Immich ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Immich did not become ready in 120s"
+          exit 1
+
+      - name: Set up Immich test user
+        id: immich
+        run: |
+          # Create admin user
+          SIGNUP_RESP=$(curl -s -X POST http://localhost/api/auth/admin-sign-up \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"test@test.com","password":"password123","name":"Test User"}')
+          echo "Sign-up response: ${SIGNUP_RESP}"
+
+          # Login to get access token
+          LOGIN_RESP=$(curl -s -X POST http://localhost/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"test@test.com","password":"password123"}')
+          echo "Login response: ${LOGIN_RESP}"
+          ACCESS_TOKEN=$(echo "$LOGIN_RESP" | jq -r '.accessToken')
+          if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
+            echo "FATAL: Failed to get access token"
+            exit 1
+          fi
+
+          # Create API key
+          APIKEY_RESP=$(curl -s -X POST http://localhost/api/api-keys \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -d '{"name":"ci-test","permissions":["all"]}')
+          echo "API key response: ${APIKEY_RESP}"
+          API_KEY=$(echo "$APIKEY_RESP" | jq -r '.secret')
+          if [ -z "$API_KEY" ] || [ "$API_KEY" = "null" ]; then
+            echo "FATAL: Failed to create API key"
+            exit 1
+          fi
+
+          # Get user UUID
+          USER_RESP=$(curl -s http://localhost/api/users/me \
+            -H "x-api-key: ${API_KEY}")
+          echo "User response: ${USER_RESP}"
+          USER_UUID=$(echo "$USER_RESP" | jq -r '.id')
+          if [ -z "$USER_UUID" ] || [ "$USER_UUID" = "null" ]; then
+            echo "FATAL: Failed to get user UUID"
+            exit 1
+          fi
+
+          echo "api-key=${API_KEY}" >> "$GITHUB_OUTPUT"
+          echo "user-uuid=${USER_UUID}" >> "$GITHUB_OUTPUT"
+
+      - name: Run integration tests
+        env:
+          INTEGRATION_SERVER_URL: "http://localhost"
+          INTEGRATION_API_KEY: ${{ steps.immich.outputs.api-key }}
+          INTEGRATION_USER_ID: ${{ steps.immich.outputs.user-uuid }}
+          INTEGRATION_USER_PATH: /tmp/immich-sync-test/${{ steps.immich.outputs.user-uuid }}
+        run: |
+          mkdir -p "${INTEGRATION_USER_PATH}"
+          cargo test --test integration -- --ignored --nocapture
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          echo "=== snap logs ==="
+          sudo snap logs immich-distribution -n 200 || true
