@@ -14,6 +14,7 @@ use crate::common::*;
 async fn duplicate_content_discovered_and_linked() {
     let (config_path, _tmp) = setup_config();
     let config = Config::load(config_path.to_str().unwrap()).expect("load config");
+    let el = event_log_path(&_tmp);
 
     let user_dir = PathBuf::from(&config.users[0].path);
     let api = ImmichAPI::new(&config.immich.server_url, &config.users[0].user_key);
@@ -24,31 +25,32 @@ async fn duplicate_content_discovered_and_linked() {
     create_test_image_with_suffix(&user_dir, "dedup_a.jpg", shared_suffix);
     create_test_image_with_suffix(&user_dir, "dedup_b.jpg", shared_suffix);
 
-    let (_guard, log_lines) = start_sync_service(&config_path).await;
+    let (_guard, _log_lines) = start_sync_service(&config_path).await;
 
     // Wait for bulk check to process both
-    wait_for_log(&log_lines, "Checking 2 assets").await;
+    wait_for_event(&el, "upload_check").await;
 
     // Wait for the one upload to complete and the duplicate to be deduplicated
-    wait_for_log(&log_lines, "Uploaded").await;
-    wait_for_log(&log_lines, "deduplicated locally").await;
+    wait_for_event(&el, "file_uploaded").await;
+    wait_for_event(&el, "upload_skipped_dedup").await;
 
     // Give extra time for upload processing to complete
     sleep(Duration::from_secs(5)).await;
 
-    // At most one "uploading" log line — the second should be deduped
-    let logs = log_lines.lock().await;
-    let upload_count = logs
+    // At most one file_uploaded for the dedup files — the second should be deduped
+    let events = read_event_log(&el);
+    let upload_count = events
         .iter()
-        .filter(|l| {
-            (l.contains("dedup_a.jpg") || l.contains("dedup_b.jpg")) && l.contains("not found in Immich, uploading")
+        .filter(|e| {
+            e["event"].as_str() == Some("file_uploaded")
+                && e["path"].as_str().is_some_and(|p| p.contains("dedup_a.jpg") || p.contains("dedup_b.jpg"))
         })
         .count();
     assert!(
         upload_count <= 1,
-        "Expected at most 1 upload for identical-content files, got {}. Logs:\n{}",
+        "Expected at most 1 upload for identical-content files, got {}.\nEvents:\n{}",
         upload_count,
-        logs.join("\n")
+        format_events(&events)
     );
 }
 
@@ -58,43 +60,46 @@ async fn duplicate_content_discovered_and_linked() {
 async fn duplicate_content_inotify_and_linked() {
     let (config_path, _tmp) = setup_config();
     let config = Config::load(config_path.to_str().unwrap()).expect("load config");
+    let el = event_log_path(&_tmp);
 
     let user_dir = PathBuf::from(&config.users[0].path);
     let api = ImmichAPI::new(&config.immich.server_url, &config.users[0].user_key);
     clean_slate(&api, &user_dir).await;
 
     // Start service FIRST, then create files (inotify path)
-    let (_guard, log_lines) = start_sync_service(&config_path).await;
+    let (_guard, _log_lines) = start_sync_service(&config_path).await;
 
     let shared_suffix = b"shared_inotify_dedup";
     create_test_image_with_suffix(&user_dir, "inotify_dup_a.jpg", shared_suffix);
     create_test_image_with_suffix(&user_dir, "inotify_dup_b.jpg", shared_suffix);
 
     // Both should be detected by inotify
-    wait_for_log(&log_lines, "inotify_dup_a.jpg added").await;
-    wait_for_log(&log_lines, "inotify_dup_b.jpg added").await;
+    wait_for_event_with_path(&el, "file_detected", "inotify_dup_a.jpg").await;
+    wait_for_event_with_path(&el, "file_detected", "inotify_dup_b.jpg").await;
 
     // Wait for the one upload to complete and the duplicate to be deduplicated
-    wait_for_log(&log_lines, "Uploaded").await;
-    wait_for_log(&log_lines, "deduplicated locally").await;
+    wait_for_event(&el, "file_uploaded").await;
+    wait_for_event(&el, "upload_skipped_dedup").await;
 
     // Give time for upload processing to complete
     sleep(Duration::from_secs(5)).await;
 
     // At most one actual upload — the second should be deduped by bulk-upload-check
-    let logs = log_lines.lock().await;
-    let upload_count = logs
+    let events = read_event_log(&el);
+    let upload_count = events
         .iter()
-        .filter(|l| {
-            (l.contains("inotify_dup_a.jpg") || l.contains("inotify_dup_b.jpg"))
-                && l.contains("not found in Immich, uploading")
+        .filter(|e| {
+            e["event"].as_str() == Some("file_uploaded")
+                && e["path"]
+                    .as_str()
+                    .is_some_and(|p| p.contains("inotify_dup_a.jpg") || p.contains("inotify_dup_b.jpg"))
         })
         .count();
     assert!(
         upload_count <= 1,
-        "Expected at most 1 upload for identical-content files, got {}. Logs:\n{}",
+        "Expected at most 1 upload for identical-content files, got {}.\nEvents:\n{}",
         upload_count,
-        logs.join("\n")
+        format_events(&events)
     );
 }
 
@@ -104,6 +109,7 @@ async fn duplicate_content_inotify_and_linked() {
 async fn duplicate_content_across_subdirectories() {
     let (config_path, _tmp) = setup_config();
     let config = Config::load(config_path.to_str().unwrap()).expect("load config");
+    let el = event_log_path(&_tmp);
 
     let user_dir = PathBuf::from(&config.users[0].path);
     let api = ImmichAPI::new(&config.immich.server_url, &config.users[0].user_key);
@@ -119,24 +125,29 @@ async fn duplicate_content_across_subdirectories() {
     create_test_image_with_suffix(&album1, "photo.jpg", shared_suffix);
     create_test_image_with_suffix(&album2, "photo.jpg", shared_suffix);
 
-    let (_guard, log_lines) = start_sync_service(&config_path).await;
+    let (_guard, _log_lines) = start_sync_service(&config_path).await;
 
     // Wait for bulk check and upload processing
-    wait_for_log(&log_lines, "Checking 2 assets").await;
-    wait_for_log(&log_lines, "Uploaded").await;
-    wait_for_log(&log_lines, "deduplicated locally").await;
+    wait_for_event(&el, "upload_check").await;
+    wait_for_event(&el, "file_uploaded").await;
+    wait_for_event(&el, "upload_skipped_dedup").await;
 
     // Give extra time for processing
     sleep(Duration::from_secs(5)).await;
 
     // Verify at most one upload
-    let logs = log_lines.lock().await;
-    let upload_count =
-        logs.iter().filter(|l| l.contains("photo.jpg") && l.contains("not found in Immich, uploading")).count();
+    let events = read_event_log(&el);
+    let upload_count = events
+        .iter()
+        .filter(|e| {
+            e["event"].as_str() == Some("file_uploaded")
+                && e["path"].as_str().is_some_and(|p| p.contains("photo.jpg"))
+        })
+        .count();
     assert!(
         upload_count <= 1,
-        "Expected at most 1 upload for identical-content files across subdirs, got {}. Logs:\n{}",
+        "Expected at most 1 upload for identical-content files across subdirs, got {}.\nEvents:\n{}",
         upload_count,
-        logs.join("\n")
+        format_events(&events)
     );
 }

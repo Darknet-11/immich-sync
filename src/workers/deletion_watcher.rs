@@ -1,4 +1,5 @@
 use crate::api::{BulkCheckInput, ImmichAPI};
+use crate::event_log::EventLogger;
 use crate::hash::checksum_to_hex;
 use crate::local_db::LocalDatabase;
 use crate::policy::{evaluate_delete_age, DeleteAgeEligibility};
@@ -23,6 +24,7 @@ const BATCH_SIZE: usize = 2000;
 /// This is the reverse of the file watcher's delete handling: the file watcher
 /// propagates local deletes to Immich, while this worker propagates Immich-side
 /// deletes back to disk.
+#[allow(clippy::too_many_arguments)]
 pub async fn deletion_watcher(
     cancel: CancellationToken,
     local_db: Arc<Mutex<LocalDatabase>>,
@@ -31,6 +33,7 @@ pub async fn deletion_watcher(
     user_id: String,
     poll_interval: u64,
     delete_max_age: i64,
+    event_logger: Option<EventLogger>,
 ) {
     info!("Deletion watcher thread running (poll interval: {}s)...", poll_interval);
 
@@ -57,6 +60,17 @@ pub async fn deletion_watcher(
                 _ = cancel.cancelled() => { return; }
             }
             continue;
+        }
+
+        if let Some(el) = &event_logger {
+            el.log(
+                "deletion_watcher",
+                "reconciliation_started",
+                &user_id,
+                None,
+                None,
+                Some(&format!("{} assets", tracked_assets.len())),
+            );
         }
 
         info!("Reconciling {} tracked assets for user {}", tracked_assets.len(), user_id);
@@ -101,6 +115,10 @@ pub async fn deletion_watcher(
                     continue;
                 }
 
+                if let Some(el) = &event_logger {
+                    el.log("deletion_watcher", "remote_delete_detected", &user_id, Some(&result.id), None, None);
+                }
+
                 // Check asset age before deleting — respect delete_max_age
                 let skip = match local_db.lock().await.asset_age_days(&user_id, &result.id) {
                     Ok(age_days) => match evaluate_delete_age(age_days, delete_max_age) {
@@ -131,6 +149,16 @@ pub async fn deletion_watcher(
                 };
 
                 if skip {
+                    if let Some(el) = &event_logger {
+                        el.log(
+                            "deletion_watcher",
+                            "remote_delete_skipped",
+                            &user_id,
+                            Some(&result.id),
+                            None,
+                            Some("age/policy"),
+                        );
+                    }
                     continue;
                 }
 
@@ -141,6 +169,8 @@ pub async fn deletion_watcher(
                 if full_path.exists() {
                     if let Err(e) = tokio::fs::remove_file(&full_path).await {
                         info!("Failed to remove file {}: {}", full_path.display(), e);
+                    } else if let Some(el) = &event_logger {
+                        el.log("deletion_watcher", "local_file_deleted", &user_id, Some(&result.id), None, None);
                     }
                 } else {
                     info!("Local file {} already removed", full_path.display());
@@ -148,6 +178,8 @@ pub async fn deletion_watcher(
 
                 if let Err(e) = local_db.lock().await.delete_asset(&user_id, &result.id) {
                     info!("Failed to remove asset from database: {}", e);
+                } else if let Some(el) = &event_logger {
+                    el.log("deletion_watcher", "db_record_removed", &user_id, Some(&result.id), None, None);
                 }
             }
         }

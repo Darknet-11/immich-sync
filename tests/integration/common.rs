@@ -54,10 +54,13 @@ pub fn setup_config_with_overrides(overrides: &ConfigOverrides) -> (PathBuf, tem
     let db_path = tmp.path().join("sync-service.db");
     let config_path = tmp.path().join("config.toml");
     let api_key = required_env("INTEGRATION_API_KEY");
+    let event_log = tmp.path().join("events.jsonl");
 
     let db = db_path.display();
-    let lines = [
+    let el = event_log.display();
+    let lines = vec![
         format!("database_path = \"{db}\""),
+        format!("event_log = \"{el}\""),
         String::new(),
         "[immich]".into(),
         format!("server_url = \"{server_url}\""),
@@ -182,6 +185,7 @@ pub async fn wait_for_no_asset(api: &ImmichAPI, filename: &str) {
     panic!("Asset '{filename}' still present in Immich after 60s");
 }
 
+#[allow(dead_code)]
 pub async fn wait_for_log(log_lines: &LogLines, substring: &str) {
     for _ in 1..=60 {
         let logs = log_lines.lock().await;
@@ -202,6 +206,117 @@ pub async fn wait_for_file_removed(path: &std::path::Path) {
         sleep(Duration::from_secs(1)).await;
     }
     panic!("Local file {} was not removed within 120s", path.display());
+}
+
+// ── Event-log helpers ──────────────────────────────────────────────
+
+pub fn event_log_path(tmp: &tempfile::TempDir) -> PathBuf {
+    tmp.path().join("events.jsonl")
+}
+
+pub fn read_event_log(path: &Path) -> Vec<serde_json::Value> {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    content.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+}
+
+pub fn filter_events<'a>(events: &'a [serde_json::Value], event_type: &str) -> Vec<&'a serde_json::Value> {
+    events.iter().filter(|e| e["event"].as_str() == Some(event_type)).collect()
+}
+
+pub fn filter_events_with_path<'a>(
+    events: &'a [serde_json::Value],
+    event_type: &str,
+    path_contains: &str,
+) -> Vec<&'a serde_json::Value> {
+    events
+        .iter()
+        .filter(|e| {
+            e["event"].as_str() == Some(event_type)
+                && e["path"].as_str().is_some_and(|p| p.contains(path_contains))
+        })
+        .collect()
+}
+
+pub fn filter_events_by_worker_and_path<'a>(
+    events: &'a [serde_json::Value],
+    worker: &str,
+    path_contains: &str,
+) -> Vec<&'a serde_json::Value> {
+    events
+        .iter()
+        .filter(|e| {
+            e["worker"].as_str() == Some(worker)
+                && e["path"].as_str().is_some_and(|p| p.contains(path_contains))
+        })
+        .collect()
+}
+
+pub fn format_events(events: &[serde_json::Value]) -> String {
+    events.iter().map(|e| serde_json::to_string(e).unwrap_or_default()).collect::<Vec<_>>().join("\n")
+}
+
+pub async fn wait_for_event(event_log: &Path, event_type: &str) {
+    for _ in 1..=60 {
+        let events = read_event_log(event_log);
+        if !filter_events(&events, event_type).is_empty() {
+            return;
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+    let events = read_event_log(event_log);
+    panic!(
+        "Event '{event_type}' did not appear within 60s.\nAll events:\n{}",
+        format_events(&events)
+    );
+}
+
+pub async fn wait_for_event_with_path(event_log: &Path, event_type: &str, path_contains: &str) {
+    for _ in 1..=60 {
+        let events = read_event_log(event_log);
+        if !filter_events_with_path(&events, event_type, path_contains).is_empty() {
+            return;
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+    let events = read_event_log(event_log);
+    panic!(
+        "Event '{event_type}' with path containing '{path_contains}' did not appear within 60s.\nAll events:\n{}",
+        format_events(&events)
+    );
+}
+
+#[allow(dead_code)]
+pub async fn wait_for_n_events(event_log: &Path, event_type: &str, n: usize) {
+    for _ in 1..=60 {
+        let events = read_event_log(event_log);
+        if filter_events(&events, event_type).len() >= n {
+            return;
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+    let events = read_event_log(event_log);
+    let found = filter_events(&events, event_type).len();
+    panic!(
+        "Expected {n} '{event_type}' events, found {found} within 60s.\nAll events:\n{}",
+        format_events(&events)
+    );
+}
+
+#[allow(dead_code)]
+pub async fn wait_for_n_events_with_path(event_log: &Path, event_type: &str, path_contains: &str, n: usize) {
+    for _ in 1..=60 {
+        let events = read_event_log(event_log);
+        if filter_events_with_path(&events, event_type, path_contains).len() >= n {
+            return;
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+    let events = read_event_log(event_log);
+    let found = filter_events_with_path(&events, event_type, path_contains).len();
+    panic!(
+        "Expected {n} '{event_type}' events with path containing '{path_contains}', found {found} within 60s.\nAll events:\n{}",
+        format_events(&events)
+    );
 }
 
 /// Directly modify the sync-service's SQLite DB to set a custom created_at timestamp.

@@ -1,6 +1,7 @@
 mod common;
 mod dedup;
 mod deletion_policy;
+mod event_log;
 mod filtering;
 mod local_changes;
 mod remote_changes;

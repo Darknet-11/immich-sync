@@ -16,13 +16,14 @@ async fn threshold_zero_blocks_local_to_remote_delete() {
     let (config_path, _tmp) =
         setup_config_with_overrides(&ConfigOverrides { delete_threshold: 0, ..Default::default() });
     let config = Config::load(config_path.to_str().unwrap()).expect("load config");
+    let el = event_log_path(&_tmp);
 
     let user_dir = PathBuf::from(&config.users[0].path);
     let api = ImmichAPI::new(&config.immich.server_url, &config.users[0].user_key);
     clean_slate(&api, &user_dir).await;
 
     // Start service, create file via inotify, wait for upload
-    let (_guard, log_lines) = start_sync_service(&config_path).await;
+    let (_guard, _log_lines) = start_sync_service(&config_path).await;
     let image_path = create_test_image(&user_dir, "test_threshold_zero.jpg");
     let _asset_id = wait_for_asset(&api, "test_threshold_zero.jpg").await;
 
@@ -30,7 +31,7 @@ async fn threshold_zero_blocks_local_to_remote_delete() {
     std::fs::remove_file(&image_path).expect("remove local file");
 
     // File watcher should see age 0 >= threshold 0, so it skips the Immich delete
-    wait_for_log(&log_lines, "exceeds threshold of 0 days, skipping delete").await;
+    wait_for_event_with_path(&el, "delete_skipped", "test_threshold_zero.jpg").await;
 
     // Asset should still be in Immich
     sleep(Duration::from_secs(5)).await;
@@ -44,13 +45,14 @@ async fn threshold_zero_blocks_local_to_remote_delete() {
 async fn delete_max_age_blocks_local_to_remote_delete() {
     let (config_path, _tmp) = setup_config();
     let config = Config::load(config_path.to_str().unwrap()).expect("load config");
+    let el = event_log_path(&_tmp);
 
     let user_dir = PathBuf::from(&config.users[0].path);
     let api = ImmichAPI::new(&config.immich.server_url, &config.users[0].user_key);
     clean_slate(&api, &user_dir).await;
 
     // Start service, create file via inotify, wait for upload
-    let (_guard, log_lines) = start_sync_service(&config_path).await;
+    let (_guard, _log_lines) = start_sync_service(&config_path).await;
     let image_path = create_test_image(&user_dir, "test_max_age_local.jpg");
     let _asset_id = wait_for_asset(&api, "test_max_age_local.jpg").await;
 
@@ -61,8 +63,8 @@ async fn delete_max_age_blocks_local_to_remote_delete() {
     // Delete the local file
     std::fs::remove_file(&image_path).expect("remove local file");
 
-    // File watcher should see age > delete_max_age (3650) → "unrealistic age, skipping delete"
-    wait_for_log(&log_lines, "unrealistic age").await;
+    // File watcher should see age > delete_max_age (3650) → skip delete
+    wait_for_event_with_path(&el, "delete_skipped", "test_max_age_local.jpg").await;
 
     // Asset should still be in Immich
     sleep(Duration::from_secs(5)).await;
@@ -76,6 +78,7 @@ async fn delete_max_age_blocks_local_to_remote_delete() {
 async fn delete_max_age_blocks_remote_to_local_delete() {
     let (config_path, _tmp) = setup_config();
     let config = Config::load(config_path.to_str().unwrap()).expect("load config");
+    let el = event_log_path(&_tmp);
 
     let user_dir = PathBuf::from(&config.users[0].path);
     let api = ImmichAPI::new(&config.immich.server_url, &config.users[0].user_key);
@@ -83,7 +86,7 @@ async fn delete_max_age_blocks_remote_to_local_delete() {
 
     // Create file before service start (discovery path) for reliable DB entry
     let image_path = create_test_image(&user_dir, "test_max_age_remote.jpg");
-    let (_guard, log_lines) = start_sync_service(&config_path).await;
+    let (_guard, _log_lines) = start_sync_service(&config_path).await;
     let asset_id = wait_for_asset(&api, "test_max_age_remote.jpg").await;
 
     // Manipulate the DB: set created_at to a very old date
@@ -95,7 +98,7 @@ async fn delete_max_age_blocks_remote_to_local_delete() {
     api.empty_trash().await.expect("empty trash");
 
     // Deletion watcher should see age > delete_max_age → skip local delete
-    wait_for_log(&log_lines, "unrealistic age").await;
+    wait_for_event_with_path(&el, "remote_delete_skipped", "test_max_age_remote.jpg").await;
 
     // Wait a few cycles to make sure it doesn't get deleted anyway
     sleep(Duration::from_secs(15)).await;

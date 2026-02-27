@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::api::ImmichAPI;
 use crate::config::Config;
+use crate::event_log::EventLogger;
 use crate::local_db::LocalDatabase;
 use crate::workers::{deletion_watcher, discovery, file_watcher, uploader};
 
@@ -24,6 +25,7 @@ pub async fn run_user_sync(
     local_db: Arc<Mutex<LocalDatabase>>,
     config: &Config,
     user_id: &str,
+    event_logger: Option<EventLogger>,
 ) -> Result<()> {
     let user = config
         .users
@@ -45,6 +47,7 @@ pub async fn run_user_sync(
         user_path.to_path_buf(),
         user.user_id.clone(),
         config.immich.import_poll_interval,
+        event_logger.clone(),
     ));
 
     let upload_handle = tokio::spawn(uploader::upload_worker(
@@ -54,6 +57,7 @@ pub async fn run_user_sync(
         user_path.to_path_buf(),
         user.user_id.clone(),
         config.immich.upload_poll_interval,
+        event_logger.clone(),
     ));
 
     let file_handle = tokio::spawn(file_watcher::file_watcher(
@@ -64,6 +68,7 @@ pub async fn run_user_sync(
         user.user_id.clone(),
         config.immich.delete_threshold,
         config.immich.delete_max_age,
+        event_logger.clone(),
     ));
 
     let deletion_handle = tokio::spawn(deletion_watcher::deletion_watcher(
@@ -74,6 +79,7 @@ pub async fn run_user_sync(
         user.user_id.clone(),
         config.immich.delete_poll_interval,
         config.immich.delete_max_age,
+        event_logger,
     ));
 
     tokio::select! {

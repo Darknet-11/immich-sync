@@ -23,6 +23,7 @@ pub fn parse_config_path() -> String {
 #[derive(Deserialize)]
 pub struct Config {
     pub database_path: String,
+    pub event_log: Option<String>,
     pub immich: ImmichConfig,
     #[serde(rename = "user")]
     pub users: Vec<UserConfig>,
@@ -181,6 +182,7 @@ server_url = "localhost"
     fn database_path_returns_absolute() {
         let config = Config {
             database_path: "/etc/sync/my.db".to_string(),
+            event_log: None,
             immich: ImmichConfig {
                 server_url: String::new(),
                 delete_threshold: 0,

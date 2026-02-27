@@ -1,3 +1,4 @@
+use crate::event_log::EventLogger;
 use crate::hash::hash_file;
 use crate::local_db::LocalDatabase;
 use crate::sync::ignored_path;
@@ -25,12 +26,17 @@ pub async fn discovery_worker(
     user_path: PathBuf,
     user_id: String,
     poll_interval: u64,
+    event_logger: Option<EventLogger>,
 ) {
     info!("Discovery worker running...");
 
     loop {
         if cancel.is_cancelled() {
             return;
+        }
+
+        if let Some(el) = &event_logger {
+            el.log("discovery", "scan_started", &user_id, None, None, None);
         }
 
         for entry in WalkDir::new(&user_path).into_iter().filter_map(|e| e.ok()) {
@@ -70,6 +76,14 @@ pub async fn discovery_worker(
                 info!("Failed to save asset: {}", e);
                 continue;
             }
+
+            if let Some(el) = &event_logger {
+                el.log("discovery", "file_discovered", &user_id, Some(&relative_path), None, None);
+            }
+        }
+
+        if let Some(el) = &event_logger {
+            el.log("discovery", "scan_completed", &user_id, None, None, None);
         }
 
         tokio::select! {

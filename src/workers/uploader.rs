@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use std::collections::HashSet;
 
 use crate::api::{BulkCheckInput, ImmichAPI};
+use crate::event_log::EventLogger;
 use crate::hash::checksum_to_hex;
 use crate::local_db::LocalDatabase;
 
@@ -36,6 +37,7 @@ pub async fn upload_worker(
     user_path: PathBuf,
     user_id: String,
     poll_interval: u64,
+    event_logger: Option<EventLogger>,
 ) {
     info!("Upload worker running...");
 
@@ -67,6 +69,10 @@ pub async fn upload_worker(
                 .map(|(path, checksum)| BulkCheckInput { id: path.clone(), checksum_hex: checksum_to_hex(checksum) })
                 .collect();
 
+            if let Some(el) = &event_logger {
+                el.log("uploader", "upload_check", &user_id, None, None, Some(&format!("{} assets", inputs.len())));
+            }
+
             let results = match api.lock().await.bulk_upload_check(&inputs).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -93,6 +99,8 @@ pub async fn upload_worker(
                                 local_db.lock().await.link_asset_by_checksum(&user_id, checksum, asset_id, None)
                             {
                                 info!("Failed to update asset ID: {}", e);
+                            } else if let Some(el) = &event_logger {
+                                el.log("uploader", "asset_linked", &user_id, Some(&result.id), Some(asset_id), None);
                             }
                         }
                     }
@@ -100,6 +108,9 @@ pub async fn upload_worker(
                     let asset_path = user_path.join(&result.id);
                     if !asset_path.exists() {
                         info!("File {} has disappeared, removing from database", result.id);
+                        if let Some(el) = &event_logger {
+                            el.log("uploader", "file_disappeared", &user_id, Some(&result.id), None, None);
+                        }
                         if let Err(e) = local_db.lock().await.delete_asset(&user_id, &result.id) {
                             info!("Failed to remove disappeared asset from database: {}", e);
                         }
@@ -109,12 +120,39 @@ pub async fn upload_worker(
                     if let Some(checksum) = checksum_map.get(result.id.as_str()) {
                         if !handled_checksums.insert(checksum.to_vec()) {
                             info!("{} deduplicated locally (same content already processed)", result.id);
+                            if let Some(el) = &event_logger {
+                                el.log("uploader", "upload_skipped_dedup", &user_id, Some(&result.id), None, None);
+                            }
                             continue;
                         }
                         info!("{} not found in Immich, uploading", result.id);
-                        if let Err(e) = import_asset(&local_db, &api, &user_id, &user_path, &asset_path, checksum).await
-                        {
-                            info!("Failed to upload {}: {}", result.id, e);
+                        match import_asset(&local_db, &api, &user_id, &user_path, &asset_path, checksum).await {
+                            Ok(Some(asset_id)) => {
+                                if let Some(el) = &event_logger {
+                                    el.log(
+                                        "uploader",
+                                        "file_uploaded",
+                                        &user_id,
+                                        Some(&result.id),
+                                        Some(&asset_id),
+                                        None,
+                                    );
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                info!("Failed to upload {}: {}", result.id, e);
+                                if let Some(el) = &event_logger {
+                                    el.log(
+                                        "uploader",
+                                        "upload_failed",
+                                        &user_id,
+                                        Some(&result.id),
+                                        None,
+                                        Some(&e.to_string()),
+                                    );
+                                }
+                            }
                         }
                     }
                 }

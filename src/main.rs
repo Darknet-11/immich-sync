@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod event_log;
 mod hash;
 mod local_db;
 mod policy;
@@ -8,6 +9,7 @@ mod workers;
 
 use anyhow::Result;
 use config::{parse_config_path, Config};
+use event_log::EventLogger;
 use local_db::LocalDatabase;
 use log::info;
 use std::sync::Arc;
@@ -22,6 +24,8 @@ async fn main() -> Result<()> {
 
     let config_path = parse_config_path();
     let config = Config::load(&config_path)?;
+
+    let event_logger = config.event_log.as_deref().map(EventLogger::open).transpose()?;
 
     let config = Arc::new(config);
 
@@ -49,9 +53,10 @@ async fn main() -> Result<()> {
         let cancel = cancel.clone();
         let local_db = Arc::clone(&local_db);
         let config = Arc::clone(&config);
+        let event_logger = event_logger.clone();
 
         let handle = tokio::spawn(async move {
-            if let Err(e) = run_user_sync(cancel, local_db, &config, &user_id).await {
+            if let Err(e) = run_user_sync(cancel, local_db, &config, &user_id, event_logger).await {
                 info!("User sync task failed: {}", e);
             }
         });

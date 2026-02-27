@@ -1,4 +1,5 @@
 use crate::api::ImmichAPI;
+use crate::event_log::EventLogger;
 use crate::hash::hash_file;
 use crate::local_db::LocalDatabase;
 use crate::policy::{evaluate_delete_age, should_propagate_local_delete, DeleteAgeEligibility};
@@ -23,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 ///
 /// This complements the discovery worker: the watcher handles live changes while
 /// discovery catches pre-existing files and anything the watcher may have missed.
+#[allow(clippy::too_many_arguments)]
 pub async fn file_watcher(
     cancel: CancellationToken,
     local_db: Arc<Mutex<LocalDatabase>>,
@@ -31,6 +33,7 @@ pub async fn file_watcher(
     user_id: String,
     delete_threshold: i64,
     delete_max_age: i64,
+    event_logger: Option<EventLogger>,
 ) {
     info!("File watcher thread running...");
 
@@ -57,10 +60,10 @@ pub async fn file_watcher(
                     }
                     match event.kind {
                         EventKind::Create(_) | EventKind::Modify(_) => {
-                            handle_create_or_modify(path, event.kind.is_create(), &local_db, &user_path, &user_id).await;
+                            handle_create_or_modify(path, event.kind.is_create(), &local_db, &user_path, &user_id, &event_logger).await;
                         }
                         EventKind::Remove(_) => {
-                            handle_remove(path, &local_db, &api, &user_path, &user_id, delete_threshold, delete_max_age).await;
+                            handle_remove(path, &local_db, &api, &user_path, &user_id, delete_threshold, delete_max_age, &event_logger).await;
                         }
                         _ => {}
                     }
@@ -79,9 +82,19 @@ async fn handle_create_or_modify(
     local_db: &Mutex<LocalDatabase>,
     user_path: &Path,
     user_id: &str,
+    event_logger: &Option<EventLogger>,
 ) {
     let action = if is_create { "added" } else { "modified" };
     info!("{} {}, queuing for upload", path.display(), action);
+
+    let relative_path = match path.strip_prefix(user_path) {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(_) => return,
+    };
+
+    if let Some(el) = event_logger {
+        el.log("file_watcher", "file_detected", user_id, Some(&relative_path), None, Some(action));
+    }
 
     let checksum = match hash_file(path).await {
         Ok(c) => c,
@@ -91,16 +104,17 @@ async fn handle_create_or_modify(
         }
     };
 
-    let relative_path = match path.strip_prefix(user_path) {
-        Ok(p) => p.to_string_lossy().to_string(),
-        Err(_) => return,
-    };
-
     if let Err(e) = local_db.lock().await.upsert_asset(user_id, &relative_path, &checksum, None, None) {
         info!("Failed to save asset: {}", e);
+        return;
+    }
+
+    if let Some(el) = event_logger {
+        el.log("file_watcher", "file_queued", user_id, Some(&relative_path), None, None);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_remove(
     path: &Path,
     local_db: &Mutex<LocalDatabase>,
@@ -109,6 +123,7 @@ async fn handle_remove(
     user_id: &str,
     delete_threshold: i64,
     delete_max_age: i64,
+    event_logger: &Option<EventLogger>,
 ) {
     let relative_path = match path.strip_prefix(user_path) {
         Ok(p) => p.to_string_lossy().to_string(),
@@ -132,14 +147,44 @@ async fn handle_remove(
             DeleteAgeEligibility::Eligible(age) => age,
             DeleteAgeEligibility::FutureCreatedAt(age) => {
                 info!("{} has creation date in the future ({} days), skipping delete", path.display(), age);
+                if let Some(el) = event_logger {
+                    el.log(
+                        "file_watcher",
+                        "delete_skipped",
+                        user_id,
+                        Some(&relative_path),
+                        None,
+                        Some(&format!("future created_at ({} days)", age)),
+                    );
+                }
                 return;
             }
             DeleteAgeEligibility::UnrealisticAge(age) => {
                 info!("{} has unrealistic age ({} days), skipping delete", path.display(), age);
+                if let Some(el) = event_logger {
+                    el.log(
+                        "file_watcher",
+                        "delete_skipped",
+                        user_id,
+                        Some(&relative_path),
+                        None,
+                        Some(&format!("unrealistic age ({} days)", age)),
+                    );
+                }
                 return;
             }
             DeleteAgeEligibility::MissingCreatedAt => {
                 info!("{} has no creation date, skipping delete", path.display());
+                if let Some(el) = event_logger {
+                    el.log(
+                        "file_watcher",
+                        "delete_skipped",
+                        user_id,
+                        Some(&relative_path),
+                        None,
+                        Some("missing created_at"),
+                    );
+                }
                 return;
             }
         },
@@ -159,9 +204,14 @@ async fn handle_remove(
             );
             if let Err(e) = api.lock().await.delete_asset(asset_id).await {
                 info!("Failed to delete asset: {}", e);
+            } else if let Some(el) = event_logger {
+                el.log("file_watcher", "delete_propagated", user_id, Some(&relative_path), Some(asset_id), None);
             }
         } else {
             info!("{} deleted but not yet uploaded, removing from database", path.display());
+            if let Some(el) = event_logger {
+                el.log("file_watcher", "delete_skipped", user_id, Some(&relative_path), None, Some("not yet uploaded"));
+            }
         }
     } else {
         info!(
@@ -170,9 +220,24 @@ async fn handle_remove(
             file_age_days,
             delete_threshold
         );
+        if let Some(el) = event_logger {
+            el.log(
+                "file_watcher",
+                "delete_skipped",
+                user_id,
+                Some(&relative_path),
+                None,
+                Some(&format!("age {} exceeds threshold {}", file_age_days, delete_threshold)),
+            );
+        }
     }
 
     if let Err(e) = local_db.lock().await.delete_asset(user_id, &relative_path) {
         info!("Failed to remove asset from database: {}", e);
+        return;
+    }
+
+    if let Some(el) = event_logger {
+        el.log("file_watcher", "db_record_removed", user_id, Some(&relative_path), None, None);
     }
 }
