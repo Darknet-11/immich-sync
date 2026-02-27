@@ -71,7 +71,7 @@ jobs:
           APIKEY_RESP=$(curl -s -X POST http://localhost/api/api-keys \
             -H 'Content-Type: application/json' \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-            -d '{"name":"ci-test","permissions":["all"]}')
+            -d '{"name":"ci-test","permissions":["asset.upload","asset.read","asset.delete","user.read"]}')
           echo "API key response: ${APIKEY_RESP}"
           API_KEY=$(echo "$APIKEY_RESP" | jq -r '.secret')
           if [ -z "$API_KEY" ] || [ "$API_KEY" = "null" ]; then
