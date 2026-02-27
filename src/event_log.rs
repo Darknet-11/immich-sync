@@ -1,9 +1,17 @@
 use anyhow::Result;
 use chrono::Utc;
+use log::warn;
 use serde::Serialize;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::sync::{Arc, Mutex};
+
+pub mod workers {
+    pub const DISCOVERY: &str = "discovery";
+    pub const UPLOADER: &str = "uploader";
+    pub const FILE_WATCHER: &str = "file_watcher";
+    pub const DELETION_WATCHER: &str = "deletion_watcher";
+}
 
 #[derive(Serialize)]
 pub struct Event {
@@ -48,11 +56,29 @@ impl EventLogger {
             asset_id: asset_id.map(String::from),
             detail: detail.map(String::from),
         };
-        if let Ok(line) = serde_json::to_string(&ev) {
-            if let Ok(mut w) = self.inner.lock() {
-                let _ = writeln!(w, "{}", line);
-                let _ = w.flush();
+        let line = match serde_json::to_string(&ev) {
+            Ok(line) => line,
+            Err(e) => {
+                warn!("Failed to serialize event (worker={}, event={}, user_id={}): {}", worker, event, user_id, e);
+                return;
             }
+        };
+
+        let mut writer = match self.inner.lock() {
+            Ok(writer) => writer,
+            Err(e) => {
+                warn!("Failed to lock event logger (worker={}, event={}, user_id={}): {}", worker, event, user_id, e);
+                return;
+            }
+        };
+
+        if let Err(e) = writeln!(writer, "{}", line) {
+            warn!("Failed to write event log line (worker={}, event={}, user_id={}): {}", worker, event, user_id, e);
+            return;
+        }
+
+        if let Err(e) = writer.flush() {
+            warn!("Failed to flush event log line (worker={}, event={}, user_id={}): {}", worker, event, user_id, e);
         }
     }
 }

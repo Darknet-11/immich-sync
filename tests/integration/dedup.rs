@@ -140,8 +140,7 @@ async fn duplicate_content_across_subdirectories() {
     let upload_count = events
         .iter()
         .filter(|e| {
-            e["event"].as_str() == Some("file_uploaded")
-                && e["path"].as_str().is_some_and(|p| p.contains("photo.jpg"))
+            e["event"].as_str() == Some("file_uploaded") && e["path"].as_str().is_some_and(|p| p.contains("photo.jpg"))
         })
         .count();
     assert!(

@@ -216,7 +216,15 @@ pub fn event_log_path(tmp: &tempfile::TempDir) -> PathBuf {
 
 pub fn read_event_log(path: &Path) -> Vec<serde_json::Value> {
     let content = std::fs::read_to_string(path).unwrap_or_default();
-    content.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    content
+        .lines()
+        .enumerate()
+        .map(|(idx, line)| {
+            serde_json::from_str(line).unwrap_or_else(|e| {
+                panic!("Malformed JSON in event log {} at line {}: {}\nline: {}", path.display(), idx + 1, e, line)
+            })
+        })
+        .collect()
 }
 
 pub fn filter_events<'a>(events: &'a [serde_json::Value], event_type: &str) -> Vec<&'a serde_json::Value> {
@@ -231,8 +239,7 @@ pub fn filter_events_with_path<'a>(
     events
         .iter()
         .filter(|e| {
-            e["event"].as_str() == Some(event_type)
-                && e["path"].as_str().is_some_and(|p| p.contains(path_contains))
+            e["event"].as_str() == Some(event_type) && e["path"].as_str().is_some_and(|p| p.contains(path_contains))
         })
         .collect()
 }
@@ -245,8 +252,7 @@ pub fn filter_events_by_worker_and_path<'a>(
     events
         .iter()
         .filter(|e| {
-            e["worker"].as_str() == Some(worker)
-                && e["path"].as_str().is_some_and(|p| p.contains(path_contains))
+            e["worker"].as_str() == Some(worker) && e["path"].as_str().is_some_and(|p| p.contains(path_contains))
         })
         .collect()
 }
@@ -264,10 +270,7 @@ pub async fn wait_for_event(event_log: &Path, event_type: &str) {
         sleep(Duration::from_secs(1)).await;
     }
     let events = read_event_log(event_log);
-    panic!(
-        "Event '{event_type}' did not appear within 60s.\nAll events:\n{}",
-        format_events(&events)
-    );
+    panic!("Event '{event_type}' did not appear within 60s.\nAll events:\n{}", format_events(&events));
 }
 
 pub async fn wait_for_event_with_path(event_log: &Path, event_type: &str, path_contains: &str) {
@@ -296,10 +299,7 @@ pub async fn wait_for_n_events(event_log: &Path, event_type: &str, n: usize) {
     }
     let events = read_event_log(event_log);
     let found = filter_events(&events, event_type).len();
-    panic!(
-        "Expected {n} '{event_type}' events, found {found} within 60s.\nAll events:\n{}",
-        format_events(&events)
-    );
+    panic!("Expected {n} '{event_type}' events, found {found} within 60s.\nAll events:\n{}", format_events(&events));
 }
 
 #[allow(dead_code)]

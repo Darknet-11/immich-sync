@@ -38,10 +38,8 @@ async fn dotfile_ignored_by_all_workers() {
 
     // No events should reference the dotfile
     let events = read_event_log(&el);
-    let dotfile_events: Vec<_> = events
-        .iter()
-        .filter(|e| e["path"].as_str().is_some_and(|p| p.contains(".hidden_photo.jpg")))
-        .collect();
+    let dotfile_events: Vec<_> =
+        events.iter().filter(|e| e["path"].as_str().is_some_and(|p| p.contains(".hidden_photo.jpg"))).collect();
     assert!(
         dotfile_events.is_empty(),
         "Events should not reference dotfile.\nMatching events:\n{}",

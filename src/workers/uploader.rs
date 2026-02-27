@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use std::collections::HashSet;
 
 use crate::api::{BulkCheckInput, ImmichAPI};
-use crate::event_log::EventLogger;
+use crate::event_log::{workers, EventLogger};
 use crate::hash::checksum_to_hex;
 use crate::local_db::LocalDatabase;
 
@@ -70,7 +70,14 @@ pub async fn upload_worker(
                 .collect();
 
             if let Some(el) = &event_logger {
-                el.log("uploader", "upload_check", &user_id, None, None, Some(&format!("{} assets", inputs.len())));
+                el.log(
+                    workers::UPLOADER,
+                    "upload_check",
+                    &user_id,
+                    None,
+                    None,
+                    Some(&format!("{} assets", inputs.len())),
+                );
             }
 
             let results = match api.lock().await.bulk_upload_check(&inputs).await {
@@ -100,7 +107,14 @@ pub async fn upload_worker(
                             {
                                 info!("Failed to update asset ID: {}", e);
                             } else if let Some(el) = &event_logger {
-                                el.log("uploader", "asset_linked", &user_id, Some(&result.id), Some(asset_id), None);
+                                el.log(
+                                    workers::UPLOADER,
+                                    "asset_linked",
+                                    &user_id,
+                                    Some(&result.id),
+                                    Some(asset_id),
+                                    None,
+                                );
                             }
                         }
                     }
@@ -109,7 +123,7 @@ pub async fn upload_worker(
                     if !asset_path.exists() {
                         info!("File {} has disappeared, removing from database", result.id);
                         if let Some(el) = &event_logger {
-                            el.log("uploader", "file_disappeared", &user_id, Some(&result.id), None, None);
+                            el.log(workers::UPLOADER, "file_disappeared", &user_id, Some(&result.id), None, None);
                         }
                         if let Err(e) = local_db.lock().await.delete_asset(&user_id, &result.id) {
                             info!("Failed to remove disappeared asset from database: {}", e);
@@ -121,7 +135,14 @@ pub async fn upload_worker(
                         if !handled_checksums.insert(checksum.to_vec()) {
                             info!("{} deduplicated locally (same content already processed)", result.id);
                             if let Some(el) = &event_logger {
-                                el.log("uploader", "upload_skipped_dedup", &user_id, Some(&result.id), None, None);
+                                el.log(
+                                    workers::UPLOADER,
+                                    "upload_skipped_dedup",
+                                    &user_id,
+                                    Some(&result.id),
+                                    None,
+                                    None,
+                                );
                             }
                             continue;
                         }
@@ -130,7 +151,7 @@ pub async fn upload_worker(
                             Ok(Some(asset_id)) => {
                                 if let Some(el) = &event_logger {
                                     el.log(
-                                        "uploader",
+                                        workers::UPLOADER,
                                         "file_uploaded",
                                         &user_id,
                                         Some(&result.id),
@@ -144,7 +165,7 @@ pub async fn upload_worker(
                                 info!("Failed to upload {}: {}", result.id, e);
                                 if let Some(el) = &event_logger {
                                     el.log(
-                                        "uploader",
+                                        workers::UPLOADER,
                                         "upload_failed",
                                         &user_id,
                                         Some(&result.id),

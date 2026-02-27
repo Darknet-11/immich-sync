@@ -1,5 +1,5 @@
 use crate::api::{BulkCheckInput, ImmichAPI};
-use crate::event_log::EventLogger;
+use crate::event_log::{workers, EventLogger};
 use crate::hash::checksum_to_hex;
 use crate::local_db::LocalDatabase;
 use crate::policy::{evaluate_delete_age, DeleteAgeEligibility};
@@ -64,7 +64,7 @@ pub async fn deletion_watcher(
 
         if let Some(el) = &event_logger {
             el.log(
-                "deletion_watcher",
+                workers::DELETION_WATCHER,
                 "reconciliation_started",
                 &user_id,
                 None,
@@ -116,7 +116,7 @@ pub async fn deletion_watcher(
                 }
 
                 if let Some(el) = &event_logger {
-                    el.log("deletion_watcher", "remote_delete_detected", &user_id, Some(&result.id), None, None);
+                    el.log(workers::DELETION_WATCHER, "remote_delete_detected", &user_id, Some(&result.id), None, None);
                 }
 
                 // Check asset age before deleting — respect delete_max_age
@@ -151,7 +151,7 @@ pub async fn deletion_watcher(
                 if skip {
                     if let Some(el) = &event_logger {
                         el.log(
-                            "deletion_watcher",
+                            workers::DELETION_WATCHER,
                             "remote_delete_skipped",
                             &user_id,
                             Some(&result.id),
@@ -170,7 +170,7 @@ pub async fn deletion_watcher(
                     if let Err(e) = tokio::fs::remove_file(&full_path).await {
                         info!("Failed to remove file {}: {}", full_path.display(), e);
                     } else if let Some(el) = &event_logger {
-                        el.log("deletion_watcher", "local_file_deleted", &user_id, Some(&result.id), None, None);
+                        el.log(workers::DELETION_WATCHER, "local_file_deleted", &user_id, Some(&result.id), None, None);
                     }
                 } else {
                     info!("Local file {} already removed", full_path.display());
@@ -179,7 +179,7 @@ pub async fn deletion_watcher(
                 if let Err(e) = local_db.lock().await.delete_asset(&user_id, &result.id) {
                     info!("Failed to remove asset from database: {}", e);
                 } else if let Some(el) = &event_logger {
-                    el.log("deletion_watcher", "db_record_removed", &user_id, Some(&result.id), None, None);
+                    el.log(workers::DELETION_WATCHER, "db_record_removed", &user_id, Some(&result.id), None, None);
                 }
             }
         }

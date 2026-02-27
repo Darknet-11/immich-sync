@@ -48,6 +48,9 @@ Create a `config.toml` file:
 ```toml
 database_path = "/var/lib/sync-service/sync-service.db"
 
+# Optional: path to structured JSONL event log
+event_log = "/var/log/sync-service/events.jsonl"
+
 [immich]
 server_url = "http://localhost:2283"
 
@@ -87,6 +90,11 @@ Windows (PowerShell):
 If no path is provided, the service looks for `config.toml` in the current directory.
 
 Place files in the configured `path` directory and they will be uploaded to Immich.
+
+If `event_log` is configured, the service writes one JSON object per line (JSONL)
+for worker events such as scans, uploads, and delete propagation decisions.
+Fields include `timestamp`, `worker`, `event`, `user_id`, and optional metadata
+(`path`, `asset_id`, `detail`).
 
 ## How It Works
 

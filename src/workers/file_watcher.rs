@@ -1,5 +1,5 @@
 use crate::api::ImmichAPI;
-use crate::event_log::EventLogger;
+use crate::event_log::{workers, EventLogger};
 use crate::hash::hash_file;
 use crate::local_db::LocalDatabase;
 use crate::policy::{evaluate_delete_age, should_propagate_local_delete, DeleteAgeEligibility};
@@ -93,7 +93,7 @@ async fn handle_create_or_modify(
     };
 
     if let Some(el) = event_logger {
-        el.log("file_watcher", "file_detected", user_id, Some(&relative_path), None, Some(action));
+        el.log(workers::FILE_WATCHER, "file_detected", user_id, Some(&relative_path), None, Some(action));
     }
 
     let checksum = match hash_file(path).await {
@@ -110,7 +110,7 @@ async fn handle_create_or_modify(
     }
 
     if let Some(el) = event_logger {
-        el.log("file_watcher", "file_queued", user_id, Some(&relative_path), None, None);
+        el.log(workers::FILE_WATCHER, "file_queued", user_id, Some(&relative_path), None, None);
     }
 }
 
@@ -149,7 +149,7 @@ async fn handle_remove(
                 info!("{} has creation date in the future ({} days), skipping delete", path.display(), age);
                 if let Some(el) = event_logger {
                     el.log(
-                        "file_watcher",
+                        workers::FILE_WATCHER,
                         "delete_skipped",
                         user_id,
                         Some(&relative_path),
@@ -163,7 +163,7 @@ async fn handle_remove(
                 info!("{} has unrealistic age ({} days), skipping delete", path.display(), age);
                 if let Some(el) = event_logger {
                     el.log(
-                        "file_watcher",
+                        workers::FILE_WATCHER,
                         "delete_skipped",
                         user_id,
                         Some(&relative_path),
@@ -177,7 +177,7 @@ async fn handle_remove(
                 info!("{} has no creation date, skipping delete", path.display());
                 if let Some(el) = event_logger {
                     el.log(
-                        "file_watcher",
+                        workers::FILE_WATCHER,
                         "delete_skipped",
                         user_id,
                         Some(&relative_path),
@@ -205,12 +205,19 @@ async fn handle_remove(
             if let Err(e) = api.lock().await.delete_asset(asset_id).await {
                 info!("Failed to delete asset: {}", e);
             } else if let Some(el) = event_logger {
-                el.log("file_watcher", "delete_propagated", user_id, Some(&relative_path), Some(asset_id), None);
+                el.log(workers::FILE_WATCHER, "delete_propagated", user_id, Some(&relative_path), Some(asset_id), None);
             }
         } else {
             info!("{} deleted but not yet uploaded, removing from database", path.display());
             if let Some(el) = event_logger {
-                el.log("file_watcher", "delete_skipped", user_id, Some(&relative_path), None, Some("not yet uploaded"));
+                el.log(
+                    workers::FILE_WATCHER,
+                    "delete_skipped",
+                    user_id,
+                    Some(&relative_path),
+                    None,
+                    Some("not yet uploaded"),
+                );
             }
         }
     } else {
@@ -222,7 +229,7 @@ async fn handle_remove(
         );
         if let Some(el) = event_logger {
             el.log(
-                "file_watcher",
+                workers::FILE_WATCHER,
                 "delete_skipped",
                 user_id,
                 Some(&relative_path),
@@ -238,6 +245,6 @@ async fn handle_remove(
     }
 
     if let Some(el) = event_logger {
-        el.log("file_watcher", "db_record_removed", user_id, Some(&relative_path), None, None);
+        el.log(workers::FILE_WATCHER, "db_record_removed", user_id, Some(&relative_path), None, None);
     }
 }
