@@ -32,7 +32,8 @@ I use this to automatically clean up old files. I have a job that removes files 
 
 ### Prerequisites
 
-- A running Immich instance with API access
+- A running Immich instance
+- An Immich API key with the following permissions: `asset.upload`, `asset.read`, `asset.delete`
 
 ### Install
 
