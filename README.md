@@ -49,11 +49,21 @@ database_path = "/var/lib/sync-service/sync-service.db"
 
 [immich]
 server_url = "http://localhost:2283"
-delete_threshold = 365      # local deletes younger than this (days) are propagated to Immich
-delete_max_age = 3650        # files older than this (days) are considered invalid and skipped
-delete_poll_interval = 3600  # seconds between deletion reconciliation checks
-import_poll_interval = 86400 # seconds between full directory scans
-upload_poll_interval = 60    # seconds between upload queue checks
+
+# Local deletes younger than this (days) are propagated to Immich
+delete_threshold = 365
+
+# Files older than this (days) are considered invalid and skipped
+delete_max_age = 3650
+
+# Seconds between deletion reconciliation checks
+delete_poll_interval = 3600
+
+# Seconds between full directory scans
+import_poll_interval = 86400 
+
+# Seconds between upload queue checks
+upload_poll_interval = 60
 
 [[user]]
 user_id = "uuid-here"
