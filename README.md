@@ -87,11 +87,6 @@ If no path is provided, the service looks for `config.toml` in the current direc
 
 Place files in the configured `path` directory and they will be uploaded to Immich.
 
-## Usage / CLI
-
-- `./sync-service` uses `config.toml` in the current working directory.
-- `./sync-service --config /path/to/config.toml` uses an explicit config path.
-
 ## How It Works
 
 Four workers run per configured user:
