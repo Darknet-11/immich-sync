@@ -30,6 +30,7 @@ const BATCH_SIZE: usize = 2000;
 ///   locally.
 ///
 /// Assets are processed in batches to avoid overwhelming the API.
+#[allow(clippy::too_many_arguments)]
 pub async fn upload_worker(
     cancel: CancellationToken,
     local_db: Arc<Mutex<LocalDatabase>>,
@@ -38,6 +39,7 @@ pub async fn upload_worker(
     user_id: String,
     poll_interval: u64,
     event_logger: Option<EventLogger>,
+    dry_run: bool,
 ) {
     info!("Upload worker running...");
 
@@ -142,6 +144,19 @@ pub async fn upload_worker(
                                     Some(&result.id),
                                     None,
                                     None,
+                                );
+                            }
+                            continue;
+                        }
+                        if dry_run {
+                            if let Some(el) = &event_logger {
+                                el.log(
+                                    workers::UPLOADER,
+                                    "upload_skipped",
+                                    &user_id,
+                                    Some(&result.id),
+                                    None,
+                                    Some("dry-run"),
                                 );
                             }
                             continue;

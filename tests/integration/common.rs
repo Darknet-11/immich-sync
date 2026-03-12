@@ -109,10 +109,22 @@ pub fn create_test_image_with_suffix(user_dir: &std::path::Path, name: &str, suf
 pub type LogLines = Arc<Mutex<Vec<String>>>;
 
 pub async fn start_sync_service(config_path: &PathBuf) -> (ChildGuard, LogLines) {
+    start_sync_service_with_args(config_path, &[]).await
+}
+
+#[allow(dead_code)]
+pub async fn start_sync_service_dry_run(config_path: &PathBuf) -> (ChildGuard, LogLines) {
+    start_sync_service_with_args(config_path, &["--dry-run"]).await
+}
+
+async fn start_sync_service_with_args(config_path: &PathBuf, extra_args: &[&str]) -> (ChildGuard, LogLines) {
     let bin = env!("CARGO_BIN_EXE_sync-service");
-    let mut child = tokio::process::Command::new(bin)
-        .arg("--config")
-        .arg(config_path)
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("--config").arg(config_path);
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    let mut child = cmd
         .env("RUST_LOG", "info")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -317,6 +329,15 @@ pub async fn wait_for_n_events_with_path(event_log: &Path, event_type: &str, pat
         "Expected {n} '{event_type}' events with path containing '{path_contains}', found {found} within 60s.\nAll events:\n{}",
         format_events(&events)
     );
+}
+
+#[allow(dead_code)]
+pub fn filter_events_with_detail<'a>(
+    events: &'a [serde_json::Value],
+    event_type: &str,
+    detail: &str,
+) -> Vec<&'a serde_json::Value> {
+    events.iter().filter(|e| e["event"].as_str() == Some(event_type) && e["detail"].as_str() == Some(detail)).collect()
 }
 
 /// Directly modify the sync-service's SQLite DB to set a custom created_at timestamp.

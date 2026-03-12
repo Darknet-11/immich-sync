@@ -34,6 +34,7 @@ pub async fn file_watcher(
     delete_threshold: i64,
     delete_max_age: i64,
     event_logger: Option<EventLogger>,
+    dry_run: bool,
 ) {
     info!("File watcher thread running...");
 
@@ -63,7 +64,7 @@ pub async fn file_watcher(
                             handle_create_or_modify(path, event.kind.is_create(), &local_db, &user_path, &user_id, &event_logger).await;
                         }
                         EventKind::Remove(_) => {
-                            handle_remove(path, &local_db, &api, &user_path, &user_id, delete_threshold, delete_max_age, &event_logger).await;
+                            handle_remove(path, &local_db, &api, &user_path, &user_id, delete_threshold, delete_max_age, &event_logger, dry_run).await;
                         }
                         _ => {}
                     }
@@ -124,6 +125,7 @@ async fn handle_remove(
     delete_threshold: i64,
     delete_max_age: i64,
     event_logger: &Option<EventLogger>,
+    dry_run: bool,
 ) {
     let relative_path = match path.strip_prefix(user_path) {
         Ok(p) => p.to_string_lossy().to_string(),
@@ -196,16 +198,36 @@ async fn handle_remove(
 
     if should_propagate_local_delete(file_age_days, delete_threshold) {
         if let Some(asset_id) = &row.asset_id {
-            info!(
-                "{} deleted, age {} days is below threshold of {} days, deleting asset in Immich",
-                path.display(),
-                file_age_days,
-                delete_threshold
-            );
-            if let Err(e) = api.lock().await.delete_asset(asset_id).await {
-                info!("Failed to delete asset: {}", e);
-            } else if let Some(el) = event_logger {
-                el.log(workers::FILE_WATCHER, "delete_propagated", user_id, Some(&relative_path), Some(asset_id), None);
+            if dry_run {
+                if let Some(el) = event_logger {
+                    el.log(
+                        workers::FILE_WATCHER,
+                        "delete_skipped",
+                        user_id,
+                        Some(&relative_path),
+                        Some(asset_id),
+                        Some("dry-run"),
+                    );
+                }
+            } else {
+                info!(
+                    "{} deleted, age {} days is below threshold of {} days, deleting asset in Immich",
+                    path.display(),
+                    file_age_days,
+                    delete_threshold
+                );
+                if let Err(e) = api.lock().await.delete_asset(asset_id).await {
+                    info!("Failed to delete asset: {}", e);
+                } else if let Some(el) = event_logger {
+                    el.log(
+                        workers::FILE_WATCHER,
+                        "delete_propagated",
+                        user_id,
+                        Some(&relative_path),
+                        Some(asset_id),
+                        None,
+                    );
+                }
             }
         } else {
             info!("{} deleted but not yet uploaded, removing from database", path.display());
@@ -239,12 +261,14 @@ async fn handle_remove(
         }
     }
 
-    if let Err(e) = local_db.lock().await.delete_asset(user_id, &relative_path) {
-        info!("Failed to remove asset from database: {}", e);
-        return;
-    }
+    if !dry_run {
+        if let Err(e) = local_db.lock().await.delete_asset(user_id, &relative_path) {
+            info!("Failed to remove asset from database: {}", e);
+            return;
+        }
 
-    if let Some(el) = event_logger {
-        el.log(workers::FILE_WATCHER, "db_record_removed", user_id, Some(&relative_path), None, None);
+        if let Some(el) = event_logger {
+            el.log(workers::FILE_WATCHER, "db_record_removed", user_id, Some(&relative_path), None, None);
+        }
     }
 }

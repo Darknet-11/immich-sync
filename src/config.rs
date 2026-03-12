@@ -3,21 +3,35 @@ use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 
-pub fn parse_config_path() -> String {
+pub struct CliArgs {
+    pub config_path: String,
+    pub dry_run: bool,
+}
+
+pub fn parse_cli_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
+    let mut config_path = "config.toml".to_string();
+    let mut dry_run = false;
     let mut i = 1;
     while i < args.len() {
-        if args[i] == "--config" {
-            if let Some(path) = args.get(i + 1) {
-                return path.clone();
-            } else {
-                eprintln!("Error: --config requires a path argument");
-                std::process::exit(1);
+        match args[i].as_str() {
+            "--config" => {
+                if let Some(path) = args.get(i + 1) {
+                    config_path = path.clone();
+                    i += 1;
+                } else {
+                    eprintln!("Error: --config requires a path argument");
+                    std::process::exit(1);
+                }
             }
+            "--dry-run" | "-n" => {
+                dry_run = true;
+            }
+            _ => {}
         }
         i += 1;
     }
-    "config.toml".to_string()
+    CliArgs { config_path, dry_run }
 }
 
 #[derive(Deserialize)]

@@ -91,6 +91,25 @@ If no path is provided, the service looks for `config.toml` in the current direc
 
 Place files in the configured `path` directory and they will be uploaded to Immich.
 
+### Dry Run
+
+Use `--dry-run` (or `-n`) to simulate without making any changes:
+
+```bash
+./sync-service -n --config /my/path/config.toml
+```
+
+The service runs normally — discovering files, hashing, and checking the Immich API — but
+skips all uploads, Immich deletes, and local file deletes. Each skipped action is recorded
+in the event log (requires `event_log` to be configured) with `detail: "dry-run"` so you
+can verify what would happen before running it for real.
+
+> **Note:** The local database is still populated during a dry run so that discovery and
+> reconciliation behave realistically. Delete the database file after a dry run to avoid
+> stale state affecting a subsequent normal run.
+
+### Event Log
+
 If `event_log` is configured, the service writes one JSON object per line (JSONL)
 for worker events such as scans, uploads, and delete propagation decisions.
 Fields include `timestamp`, `worker`, `event`, `user_id`, and optional metadata

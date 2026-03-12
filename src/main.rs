@@ -8,7 +8,7 @@ mod sync;
 mod workers;
 
 use anyhow::Result;
-use config::{parse_config_path, Config};
+use config::{parse_cli_args, Config};
 use event_log::EventLogger;
 use local_db::LocalDatabase;
 use log::info;
@@ -22,8 +22,12 @@ use tokio_util::sync::CancellationToken;
 async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).format_timestamp(None).init();
 
-    let config_path = parse_config_path();
-    let config = Config::load(&config_path)?;
+    let cli = parse_cli_args();
+    let config = Config::load(&cli.config_path)?;
+
+    if cli.dry_run {
+        info!("Dry-run mode enabled — no changes will be made to Immich or disk");
+    }
 
     let event_logger = config.event_log.as_deref().map(EventLogger::open).transpose()?;
 
@@ -55,8 +59,9 @@ async fn main() -> Result<()> {
         let config = Arc::clone(&config);
         let event_logger = event_logger.clone();
 
+        let dry_run = cli.dry_run;
         let handle = tokio::spawn(async move {
-            if let Err(e) = run_user_sync(cancel, local_db, &config, &user_id, event_logger).await {
+            if let Err(e) = run_user_sync(cancel, local_db, &config, &user_id, event_logger, dry_run).await {
                 info!("User sync task failed: {}", e);
             }
         });

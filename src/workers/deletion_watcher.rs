@@ -34,6 +34,7 @@ pub async fn deletion_watcher(
     poll_interval: u64,
     delete_max_age: i64,
     event_logger: Option<EventLogger>,
+    dry_run: bool,
 ) {
     info!("Deletion watcher thread running (poll interval: {}s)...", poll_interval);
 
@@ -164,6 +165,21 @@ pub async fn deletion_watcher(
 
                 // Asset no longer exists in Immich — delete local file
                 let full_path = user_path.join(&result.id);
+
+                if dry_run {
+                    if let Some(el) = &event_logger {
+                        el.log(
+                            workers::DELETION_WATCHER,
+                            "local_delete_skipped",
+                            &user_id,
+                            Some(&result.id),
+                            None,
+                            Some("dry-run"),
+                        );
+                    }
+                    continue;
+                }
+
                 info!("Asset {} deleted from Immich, removing local file {}", result.id, full_path.display());
 
                 if full_path.exists() {

@@ -26,6 +26,7 @@ pub async fn run_user_sync(
     config: &Config,
     user_id: &str,
     event_logger: Option<EventLogger>,
+    dry_run: bool,
 ) -> Result<()> {
     let user = config
         .users
@@ -58,6 +59,7 @@ pub async fn run_user_sync(
         user.user_id.clone(),
         config.immich.upload_poll_interval,
         event_logger.clone(),
+        dry_run,
     ));
 
     let file_handle = tokio::spawn(file_watcher::file_watcher(
@@ -69,6 +71,7 @@ pub async fn run_user_sync(
         config.immich.delete_threshold,
         config.immich.delete_max_age,
         event_logger.clone(),
+        dry_run,
     ));
 
     let deletion_handle = tokio::spawn(deletion_watcher::deletion_watcher(
@@ -80,6 +83,7 @@ pub async fn run_user_sync(
         config.immich.delete_poll_interval,
         config.immich.delete_max_age,
         event_logger,
+        dry_run,
     ));
 
     tokio::select! {
