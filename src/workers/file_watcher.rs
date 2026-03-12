@@ -6,11 +6,16 @@ use crate::policy::{evaluate_delete_age, should_propagate_local_delete, DeleteAg
 use crate::sync::ignored_path;
 use log::info;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+
+const DEBOUNCE_MS: u64 = 2000;
+const TICK_MS: u64 = 200;
 
 /// Reacts to live filesystem events in the user directory.
 ///
@@ -52,6 +57,10 @@ pub async fn file_watcher(
 
     _watcher.watch(&user_path, RecursiveMode::Recursive).expect("Failed to watch directory");
 
+    let debounce = Duration::from_millis(DEBOUNCE_MS);
+    let tick = Duration::from_millis(TICK_MS);
+    let mut pending: HashMap<PathBuf, (EventKind, Instant)> = HashMap::new();
+
     loop {
         tokio::select! {
             Some(event) = rx.recv() => {
@@ -60,11 +69,13 @@ pub async fn file_watcher(
                         continue;
                     }
                     match event.kind {
-                        EventKind::Create(_) | EventKind::Modify(_) => {
-                            handle_create_or_modify(path, event.kind.is_create(), &local_db, &user_path, &user_id, &event_logger).await;
-                        }
-                        EventKind::Remove(_) => {
-                            handle_remove(path, &local_db, &api, &user_path, &user_id, delete_threshold, delete_max_age, &event_logger, dry_run).await;
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                            let now = Instant::now();
+                            let new_kind = match pending.get(path) {
+                                Some((existing_kind, _)) => merge_event_kind(existing_kind, &event.kind),
+                                None => event.kind,
+                            };
+                            pending.insert(path.clone(), (new_kind, now));
                         }
                         _ => {}
                     }
@@ -73,7 +84,47 @@ pub async fn file_watcher(
             _ = cancel.cancelled() => {
                 return;
             }
+            _ = tokio::time::sleep(tick) => {}
         }
+
+        // Process settled events
+        let now = Instant::now();
+        let settled: Vec<PathBuf> = pending
+            .iter()
+            .filter(|(_, (_, ts))| now.duration_since(*ts) >= debounce)
+            .map(|(path, _)| path.clone())
+            .collect();
+
+        for path in settled {
+            let (kind, _) = pending.remove(&path).unwrap();
+            match kind {
+                EventKind::Create(_) | EventKind::Modify(_) => {
+                    handle_create_or_modify(&path, kind.is_create(), &local_db, &user_path, &user_id, &event_logger).await;
+                }
+                EventKind::Remove(_) => {
+                    handle_remove(&path, &local_db, &api, &user_path, &user_id, delete_threshold, delete_max_age, &event_logger, dry_run).await;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Merge two event kinds for the same path during debouncing.
+///
+/// - Remove always wins over a pending Create/Modify (file was deleted).
+/// - Create/Modify after a pending Remove → treat as Create (file was recreated).
+/// - Create/Modify after a pending Create → keep Create.
+/// - Create/Modify after a pending Modify → keep Modify (unless new is Create).
+fn merge_event_kind(existing: &EventKind, incoming: &EventKind) -> EventKind {
+    match incoming {
+        EventKind::Remove(_) => *incoming,
+        EventKind::Create(_) | EventKind::Modify(_) => match existing {
+            EventKind::Remove(_) => EventKind::Create(notify::event::CreateKind::Any),
+            EventKind::Create(_) => *existing,
+            _ => *incoming,
+        },
+        _ => *incoming,
     }
 }
 
@@ -270,5 +321,76 @@ async fn handle_remove(
         if let Some(el) = event_logger {
             el.log(workers::FILE_WATCHER, "db_record_removed", user_id, Some(&relative_path), None, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{CreateKind, ModifyKind, RemoveKind};
+
+    fn create() -> EventKind {
+        EventKind::Create(CreateKind::Any)
+    }
+    fn modify() -> EventKind {
+        EventKind::Modify(ModifyKind::Any)
+    }
+    fn remove() -> EventKind {
+        EventKind::Remove(RemoveKind::Any)
+    }
+
+    #[test]
+    fn merge_create_then_modify_keeps_create() {
+        let result = merge_event_kind(&create(), &modify());
+        assert!(result.is_create());
+    }
+
+    #[test]
+    fn merge_modify_then_modify_keeps_modify() {
+        let result = merge_event_kind(&modify(), &modify());
+        assert!(result.is_modify());
+    }
+
+    #[test]
+    fn merge_create_then_create_keeps_create() {
+        let result = merge_event_kind(&create(), &create());
+        assert!(result.is_create());
+    }
+
+    #[test]
+    fn merge_modify_then_create_becomes_create() {
+        let result = merge_event_kind(&modify(), &create());
+        assert!(result.is_create());
+    }
+
+    #[test]
+    fn merge_create_then_remove_becomes_remove() {
+        let result = merge_event_kind(&create(), &remove());
+        assert!(result.is_remove());
+    }
+
+    #[test]
+    fn merge_modify_then_remove_becomes_remove() {
+        let result = merge_event_kind(&modify(), &remove());
+        assert!(result.is_remove());
+    }
+
+    #[test]
+    fn merge_remove_then_create_becomes_create() {
+        let result = merge_event_kind(&remove(), &create());
+        assert!(result.is_create());
+    }
+
+    #[test]
+    fn merge_remove_then_modify_becomes_create() {
+        // File was deleted then recreated — treat as create even if OS says modify
+        let result = merge_event_kind(&remove(), &modify());
+        assert!(result.is_create());
+    }
+
+    #[test]
+    fn merge_remove_then_remove_stays_remove() {
+        let result = merge_event_kind(&remove(), &remove());
+        assert!(result.is_remove());
     }
 }
