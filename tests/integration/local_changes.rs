@@ -9,6 +9,14 @@ use tokio::time::sleep;
 
 use crate::common::*;
 
+/// Simulate Syncthing's delete behavior: rename file to .trashed-<id>-<name>
+fn syncthing_trash(path: &std::path::Path) {
+    let dir = path.parent().unwrap();
+    let name = path.file_name().unwrap().to_str().unwrap();
+    let trashed = dir.join(format!(".trashed-1234567890-{}", name));
+    std::fs::rename(path, &trashed).expect("rename to .trashed");
+}
+
 #[tokio::test]
 #[serial]
 #[ignore = "requires Immich installed and configured on localhost"]
@@ -126,4 +134,36 @@ async fn rapid_create_delete_before_upload() {
     // Verify by creating another file and checking it gets uploaded
     create_test_image_with_suffix(&user_dir, "test_still_alive.jpg", b"alive");
     let _asset_id = wait_for_asset(&api, "test_still_alive.jpg").await;
+}
+
+/// Syncthing deletes files by renaming them to `.trashed-<id>-<name>` rather
+/// than unlinking. This produces a MOVED_FROM inotify event (reported as
+/// Modify by the notify crate) with no corresponding DELETE. The file watcher
+/// must detect that the file no longer exists and treat it as a removal.
+#[tokio::test]
+#[serial]
+#[ignore = "requires Immich installed and configured on localhost"]
+async fn syncthing_trash_rename_triggers_remote_delete() {
+    let (config_path, _tmp) = setup_config();
+    let config = Config::load(config_path.to_str().unwrap()).expect("load config");
+    let el = event_log_path(&_tmp);
+
+    let user_dir = PathBuf::from(&config.users[0].path);
+    let api = ImmichAPI::new(&config.immich.server_url, &config.users[0].user_key);
+    clean_slate(&api, &user_dir).await;
+
+    let (_guard, _log_lines) = start_sync_service(&config_path).await;
+
+    // Create file and wait for upload
+    let image_path = create_test_image(&user_dir, "test_syncthing_trash.jpg");
+    let _asset_id = wait_for_asset(&api, "test_syncthing_trash.jpg").await;
+
+    // Simulate Syncthing delete: rename to .trashed-* (no DELETE event emitted)
+    syncthing_trash(&image_path);
+
+    // File watcher should see Modify(Name), detect file is gone, and route to handle_remove
+    wait_for_event_with_path(&el, "delete_propagated", "test_syncthing_trash.jpg").await;
+
+    // Verify the asset is gone from Immich
+    wait_for_no_asset(&api, "test_syncthing_trash.jpg").await;
 }

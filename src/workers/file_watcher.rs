@@ -99,8 +99,44 @@ pub async fn file_watcher(
             let (kind, _) = pending.remove(&path).unwrap();
             match kind {
                 EventKind::Create(_) | EventKind::Modify(_) => {
-                    handle_create_or_modify(&path, kind.is_create(), &local_db, &user_path, &user_id, &event_logger)
+                    if path.exists() {
+                        handle_create_or_modify(
+                            &path,
+                            kind.is_create(),
+                            &local_db,
+                            &user_path,
+                            &user_id,
+                            &event_logger,
+                        )
                         .await;
+                    } else {
+                        let relative_path = path.strip_prefix(&user_path).map(|p| p.to_string_lossy().to_string());
+                        if let Ok(ref rel) = relative_path {
+                            info!("{} renamed away (e.g. Syncthing trash), treating as delete", rel);
+                            if let Some(ref el) = event_logger {
+                                el.log(
+                                    workers::FILE_WATCHER,
+                                    "file_detected",
+                                    &user_id,
+                                    Some(rel),
+                                    None,
+                                    Some("renamed_away"),
+                                );
+                            }
+                        }
+                        handle_remove(
+                            &path,
+                            &local_db,
+                            &api,
+                            &user_path,
+                            &user_id,
+                            delete_threshold,
+                            delete_max_age,
+                            &event_logger,
+                            dry_run,
+                        )
+                        .await;
+                    }
                 }
                 EventKind::Remove(_) => {
                     handle_remove(
@@ -158,10 +194,6 @@ async fn handle_create_or_modify(
 
     if let Some(el) = event_logger {
         el.log(workers::FILE_WATCHER, "file_detected", user_id, Some(&relative_path), None, Some(action));
-    }
-
-    if !path.exists() {
-        return;
     }
 
     let checksum = match hash_file(path).await {
