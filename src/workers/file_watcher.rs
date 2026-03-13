@@ -160,6 +160,10 @@ async fn handle_create_or_modify(
         el.log(workers::FILE_WATCHER, "file_detected", user_id, Some(&relative_path), None, Some(action));
     }
 
+    if !path.exists() {
+        return;
+    }
+
     let checksum = match hash_file(path).await {
         Ok(c) => c,
         Err(e) => {
@@ -198,7 +202,6 @@ async fn handle_remove(
     let row = match local_db.lock().await.find_asset_by_path(user_id, &relative_path) {
         Ok(Some(r)) => r,
         Ok(None) => {
-            info!("Asset {} not found in local database", relative_path);
             return;
         }
         Err(e) => {
