@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.4 - 2026-03-13
+
+### Added
+
+- Debounce file watcher events to avoid redundant hashes and uploading partially-written files. Events for the same path are coalesced over a 2-second window before processing.
+
 ## 0.1.3 - 2026-03-12
 
 ### Fixed
