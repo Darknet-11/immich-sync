@@ -104,7 +104,7 @@ async fn modify_file_rehashes_and_reuploads() {
 async fn rapid_create_delete_before_upload() {
     let (config_path, _tmp) = setup_config();
     let config = Config::load(config_path.to_str().unwrap()).expect("load config");
-    let el = event_log_path(&_tmp);
+    let _el = event_log_path(&_tmp);
 
     let user_dir = PathBuf::from(&config.users[0].path);
     let api = ImmichAPI::new(&config.immich.server_url, &config.users[0].user_key);
@@ -117,19 +117,13 @@ async fn rapid_create_delete_before_upload() {
     let image_path = create_test_image(&user_dir, "test_rapid_delete.jpg");
     std::fs::remove_file(&image_path).expect("remove file immediately");
 
-    // Wait long enough for the service to process the events (a couple of poll cycles)
+    // Wait long enough for the service to process the events (a couple of poll cycles).
+    // With debouncing (2s window), the rapid create→delete merges into a single Remove
+    // event, so the service never hashes the vanished file.
     sleep(Duration::from_secs(15)).await;
 
     // The service should still be running (no crash/panic)
     // Verify by creating another file and checking it gets uploaded
     create_test_image_with_suffix(&user_dir, "test_still_alive.jpg", b"alive");
     let _asset_id = wait_for_asset(&api, "test_still_alive.jpg").await;
-
-    // Verify service saw the rapid file
-    let events = read_event_log(&el);
-    assert!(
-        !filter_events_with_path(&events, "file_detected", "test_rapid_delete.jpg").is_empty(),
-        "Service should have attempted to process the rapidly deleted file.\nEvents:\n{}",
-        format_events(&events)
-    );
 }
