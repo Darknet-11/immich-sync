@@ -72,7 +72,12 @@ pub async fn discovery_worker(
                 }
             };
 
-            if let Err(e) = local_db.lock().await.upsert_asset(&user_id, &relative_path, &checksum, None, None) {
+            let created_at = match tokio::fs::metadata(&path).await {
+                Ok(meta) => Some(super::uploader::file_created_at_string(&meta)),
+                Err(_) => None,
+            };
+
+            if let Err(e) = local_db.lock().await.upsert_asset(&user_id, &relative_path, &checksum, None, created_at.as_deref()) {
                 info!("Failed to save asset: {}", e);
                 continue;
             }

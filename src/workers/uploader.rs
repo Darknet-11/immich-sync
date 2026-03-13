@@ -256,6 +256,13 @@ fn timestamp_to_string(ts: f64) -> String {
     DateTime::<Utc>::from_timestamp(ts as i64, 0).unwrap_or_default().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
+/// Returns the file's creation timestamp as an ISO-like string, using mtime as fallback.
+pub(crate) fn file_created_at_string(metadata: &Metadata) -> String {
+    let mtime = metadata.modified().map(system_time_to_secs).unwrap_or(0.0);
+    let ctime = metadata.created().map(system_time_to_secs).unwrap_or(mtime);
+    timestamp_to_string(ctime)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
