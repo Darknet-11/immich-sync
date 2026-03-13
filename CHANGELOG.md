@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.5 - 2026-03-13
+
+### Fixed
+
+- Handle Syncthing rename-to-trash deletions. Syncthing deletes files by renaming them to `.trashed-*` instead of unlinking, which was not detected as a removal. The file watcher now treats Create/Modify events for missing files as deletions.
+- Reduce log noise from deletion_watcher cleanup races (suppress "not found in local database" for already-removed records).
+
 ## 0.1.4 - 2026-03-13
 
 ### Added
