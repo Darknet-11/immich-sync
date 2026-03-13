@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.6 - 2026-03-13
+
+### Fixed
+
+- Set `created_at` when discovering and watching files. The discovery and file watcher workers were inserting assets without a creation timestamp, so delete propagation was skipped for any asset that hadn't been re-uploaded. Existing rows are backfilled on the next discovery scan.
+
 ## 0.1.5 - 2026-03-13
 
 ### Fixed

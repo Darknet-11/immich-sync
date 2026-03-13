@@ -77,7 +77,9 @@ pub async fn discovery_worker(
                 Err(_) => None,
             };
 
-            if let Err(e) = local_db.lock().await.upsert_asset(&user_id, &relative_path, &checksum, None, created_at.as_deref()) {
+            if let Err(e) =
+                local_db.lock().await.upsert_asset(&user_id, &relative_path, &checksum, None, created_at.as_deref())
+            {
                 info!("Failed to save asset: {}", e);
                 continue;
             }
