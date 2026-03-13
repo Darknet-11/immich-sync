@@ -99,10 +99,22 @@ pub async fn file_watcher(
             let (kind, _) = pending.remove(&path).unwrap();
             match kind {
                 EventKind::Create(_) | EventKind::Modify(_) => {
-                    handle_create_or_modify(&path, kind.is_create(), &local_db, &user_path, &user_id, &event_logger).await;
+                    handle_create_or_modify(&path, kind.is_create(), &local_db, &user_path, &user_id, &event_logger)
+                        .await;
                 }
                 EventKind::Remove(_) => {
-                    handle_remove(&path, &local_db, &api, &user_path, &user_id, delete_threshold, delete_max_age, &event_logger, dry_run).await;
+                    handle_remove(
+                        &path,
+                        &local_db,
+                        &api,
+                        &user_path,
+                        &user_id,
+                        delete_threshold,
+                        delete_max_age,
+                        &event_logger,
+                        dry_run,
+                    )
+                    .await;
                 }
                 _ => {}
             }
