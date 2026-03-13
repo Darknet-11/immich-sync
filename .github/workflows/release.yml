@@ -15,8 +15,39 @@ jobs:
   checks:
     uses: ./.github/workflows/checks.yml
 
+  changelog:
+    runs-on: ubuntu-latest
+    outputs:
+      notes: ${{ steps.extract.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract changelog for this version
+        id: extract
+        run: |
+          # Strip leading 'v' from tag to match changelog headings
+          version="${GITHUB_REF_NAME#v}"
+
+          # Extract the section for this version (everything between this heading and the next ## heading)
+          notes=$(awk -v ver="$version" '
+            /^## / { if (found) exit; if (index($0, ver)) found=1; next }
+            found { print }
+          ' CHANGELOG.md)
+
+          if [ -z "$notes" ]; then
+            echo "::error::No CHANGELOG.md entry found for version $version"
+            exit 1
+          fi
+
+          # Write to output using multiline syntax
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$notes"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
   release:
-    needs: checks
+    needs: [checks, changelog]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -112,7 +143,7 @@ jobs:
           path: dist/sync-service-${{ matrix.target }}.zip
 
   publish:
-    needs: release
+    needs: [release, changelog]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -125,10 +156,14 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          CHANGELOG_NOTES: ${{ needs.changelog.outputs.notes }}
         run: |
+          notes="$CHANGELOG_NOTES
+
+          > **Note:** Only the Linux build is well tested. If you try one of the other builds and run into issues, please [open an issue](https://github.com/${{ github.repository }}/issues). If everything works, we'd love to hear that too!"
+
           gh release create ${{ github.ref_name }} \
             --repo ${{ github.repository }} \
-            --generate-notes \
-            --notes "> **Note:** Only the Linux build is well tested. If you try one of the other builds and run into issues, please [open an issue](https://github.com/${{ github.repository }}/issues). If everything works, we'd love to hear that too!" \
+            --notes "$notes" \
             artifacts/**/*.tar.gz \
             artifacts/**/*.zip
